@@ -1,0 +1,32 @@
+{
+  "name": "admin228-cli-utils",
+  "version": "1.1.0",
+  "description": "Набор CLI-утилит: codescan (сканирование и объединение кода) и dirtree (генерация дерева каталогов).",
+  "main": "codescan.js",
+  "type": "module",
+  "bin": {
+    "codescan": "./codescan.js",
+    "dirtree": "./dirtree.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "cli",
+    "util",
+    "node",
+    "code",
+    "scan",
+    "concatenate",
+    "directory",
+    "tree",
+    "structure"
+  ],
+  "author": "admin228",
+  "license": "ISC",
+  "dependencies": {
+    "ignore": "^5.3.1",
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {}
+}
