@@ -1,0 +1,7 @@
+--- File: index.js ---
+
+//
+// dewdwde
+let a = 5;
+
+--- End of File: index.js ---
