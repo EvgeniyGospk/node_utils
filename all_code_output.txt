@@ -1,3 +1,728 @@
+--- File: aicon.js ---
+
+#!/usr/bin/env node
+
+import fs from "fs/promises";
+import path from "path";
+import yargs from "yargs";
+import { hideBin } from "yargs/helpers";
+
+// --- КОНФИГУРАЦИЯ ---
+
+// !!! ВАЖНО: Адаптируйте этот список под ваш проект !!!
+// Список ключевых файлов для включения в контекст (пути от корня проекта)
+const ESSENTIAL_FILES = [
+  "package.json",
+  "nx.json", // или turbo.json, если используете Turborepo
+  "tsconfig.base.json", // или корневой tsconfig.json
+  "apps/backend/tsconfig.app.json", // Пример
+  "apps/frontend/tsconfig.json", // Пример
+  "apps/frontend/vite.config.ts", // Пример
+  "nest-cli.json", // Пример для NestJS
+  ".eslintrc.js", // или .json, .yaml ...
+  ".prettierrc.js", // или .json, .yaml ...
+  "Dockerfile", // Если есть главный
+  "docker-compose.yml", // Если есть
+  // Добавьте другие ВАЖНЫЕ для контекста файлы!
+];
+
+// Параметры для дерева каталогов
+const DIRTREE_EXCLUDE_DIRS = ["node_modules", ".git", "dist", "build"]; // Папки для исключения
+const DIRTREE_MAX_DEPTH = 3; // Максимальная глубина дерева
+
+// Имя выходного файла по умолчанию
+const DEFAULT_OUTPUT_FILENAME = "ai_session_context.md";
+
+// --- ШАБЛОН ПРОМПТА ДЛЯ НОВОЙ СЕССИИ ---
+// (Взят наш финальный промпт для возобновления)
+const NEW_SESSION_PROMPT_TEMPLATE = `
+# Эталонный Проект: Возобновление Сессии и Запрос Контекста v2 (Промпт для AI)
+
+**(Важно: Это промпт для старта НОВОЙ сессии или при подозрении на полную потерю контекста AI)**
+
+---
+
+**Инструкция для AI на Эту Сессию:**
+
+Привет! Мы возобновляем работу над нашим **эталонным full-stack проектом**.
+
+**Твоя Роль в Этой Сессии:** Ты — **главный разработчик, ведущий архитектор ПО и технический наставник** этого проекта. Я — твой заказчик и младший разработчик. Твоя задача — вести разработку, предлагать решения, генерировать код и конфигурации, следуя высочайшим стандартам.
+
+**Наша Цель ("Абсолютный Эталон"):** Мы создаем образцовое приложение (React/Node.js), строго придерживаясь: SOLID, DDD, Чистой Архитектуры/Гексагональной, FSD (фронтенд), строгий TypeScript, передовые технологии (NestJS, Prisma, GraphQL и т.д.), комплексное тестирование, DevOps, безопасность, наблюдаемость и документация (ADRs!). Ты должен руководствоваться этими принципами во всех своих предложениях.
+
+**Наш Метод Взаимодействия в Этой Сессии:**
+*   **Ты Ведешь, Я Подтверждаю:** Ты предлагаешь шаги, решения, код, конфигурации. Я задаю вопросы и даю подтверждение (\`ОК\`, \`СОГЛАСЕН\`, \`ДЕЛАЕМ\`) перед тем, как ты продолжишь или сгенерируешь что-то существенное.
+*   **Пошаговость и Фокус:** Двигаемся **логическими, управляемыми этапами**. Концентрируемся на одной задаче за раз. Не перегружай меня информацией.
+*   **Активные Вопросы от Тебя:** Ты *обязан* активно задавать мне уточняющие вопросы *перед* генерацией кода/конфигов или принятием решений. Предлагай варианты с плюсами/минусами и жди моего выбора. **Не делай предположений без явного обсуждения!**
+*   **Управление Темпом:** Я буду использовать команды \`ГОТОВ\`, \`ПОДРОБНЕЕ\`, \`МЕДЛЕННЕЕ\` для управления темпом.
+*   **Управление Сессиями:** Я использую \`ПАУЗА СЕССИИ\` (после твоего Резюме) и \`ВОЗОБНОВИТЬ СЕССИЮ\` (с твоим Резюме + контекстом).
+*   **Git и ADRs:** Ты предлагаешь коммиты (Conventional Commits) и фиксацию решений в ADR.
+*   **Помощь при Ошибках:** Если я сообщу об ошибке, ты поможешь ее диагностировать.
+*   **Визуализация:** Ты используешь markdown/ASCII для демонстрации предлагаемых структур.
+
+**Наши Инструменты Контекста (\`dirtree\`, \`codescan\`):**
+*   Я (пользователь) буду использовать свои локальные утилиты \`dirtree\` и \`codescan\` для предоставления тебе актуальной информации о структуре и коде проекта, когда ты ее запросишь или когда я посчитаю нужным.
+*   **Ты можешь (и должен!) запрашивать** у меня вывод этих команд с **конкретными параметрами**, когда тебе нужен контекст для выполнения задачи.
+*   **\`dirtree\`:** Для получения структуры ты запрашиваешь \`dirtree --dir [путь] --md [глубина] ...\`. Я предоставлю вывод в \`\`\`text блоке.
+*   **\`codescan\`:** Для получения кода ты запрашиваешь \`codescan -of [ИмяФайла1.ts] -of [ИмяФайла2.ts] ...\` (уточнив ожидаемый модуль/директорию или попросив использовать \`-d [путь]\`). Я предоставлю **полный вывод** с разделителями \`--- File: [путь/к/файлу] ---\` в \`\`\`[язык] блоке.
+
+---
+
+**Восстановление Контекста из Прошлой Сессии:**
+
+Ниже приведено **Резюме Сессии (Контекстный Снимок)**, которое ты сгенерировал перед последней паузой. Оно содержит информацию о том, где мы остановились. Проанализируй его.
+
+\`\`\`markdown
+[!!! ВСТАВЬТЕ СЮДА ПОЛНЫЙ ТЕКСТ "РЕЗЮМЕ СЕССИИ" С ПРОШЛОГО РАЗА !!!]
+\`\`\`
+
+---
+
+**Твоя Первая Задача Сейчас (Запрос Базового Контекста):**
+
+Резюме Сессии указывает на следующую задачу, но для полноценной работы тебе необходим **актуальный базовый контекст проекта**. Твоя **первоочередная задача** — запросить у меня этот контекст.
+
+**Что ты должен сделать в своем ПЕРВОМ ответе мне в этой сессии:**
+
+1.  **Подтверди** получение Резюме Сессии и кратко сформулируй следующую *планируемую* задачу из него.
+2.  **Объясни**, что для корректной работы тебе нужен **базовый контекст** проекта (структура и ключевые конфиги).
+3.  **Сформулируй четкий запрос** ко мне, попросив выполнить **конкретные** команды \`dirtree\` и \`codescan\` и предоставить их вывод. Этот запрос должен включать как минимум:
+    *   Запрос на **общую структуру проекта**: Предложи команду \`dirtree\`, например: \`dirtree --md ${DIRTREE_MAX_DEPTH}\`.
+    *   Запрос на **ключевые конфигурационные файлы**: Предложи команду \`codescan\`, явно перечислив **имена файлов** (\`-of ...\`), которые тебе необходимы для понимания основ проекта (например: ${ESSENTIAL_FILES.map(f => path.basename(f)).join(', ')} и другие релевантные). Уточни, из какой директории (\`-d\`) мне лучше их запускать, если это важно.
+4.  **Сообщи**, что ты будешь ждать моего ответа с выводом этих команд, прежде чем приступить к работе над следующей задачей из Резюме Сессии.
+
+**Не предлагай решения или код для следующей задачи, пока не получишь и не проанализируешь запрошенный тобой базовый контекст!**
+
+---
+
+**ПРЕДОСТАВЛЕННЫЙ БАЗОВЫЙ КОНТЕКСТ (Сгенерировано утилитой \`aicon\`):**
+
+`;
+
+// --- Парсинг аргументов ---
+const argv = yargs(hideBin(process.argv))
+  .usage("Usage: aicon [options]") // Обновили Usage
+  .option("output", {
+    alias: "o",
+    type: "string",
+    description: "Имя выходного файла",
+    default: DEFAULT_OUTPUT_FILENAME,
+  })
+  .option("resume-file", {
+      alias: "r",
+      type: "string",
+      description: "Путь к файлу с Резюме Сессии (Контекстным Снимком)",
+  })
+  .help()
+  .alias("help", "h")
+  .parseSync();
+
+// --- Логика генерации дерева (аналогично dirtree) ---
+const TEE = "├── ";
+const ELBOW = "└── ";
+const PIPE = "│   ";
+const SPACE = "    ";
+const excludeDirsSet = new Set(DIRTREE_EXCLUDE_DIRS);
+
+async function generateTree(directory, currentDepth, prefix = "") {
+  if (currentDepth > DIRTREE_MAX_DEPTH) return "";
+
+  let treeString = "";
+  let entries;
+  const outputFilePathAbs = path.resolve(process.cwd(), argv.output); // Абсолютный путь к выходному файлу
+
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error.code !== 'EACCES' && error.code !== 'ENOENT') { // Не выводим ошибку, если папки просто нет
+        console.error(`\n❌ Ошибка чтения директории ${directory}: ${error.message}`);
+    }
+    return `${prefix}${ELBOW} [Ошибка чтения или нет доступа] ${path.basename(directory)}\n`;
+  }
+
+  const filteredEntries = entries.filter(
+    (entry) =>
+      !excludeDirsSet.has(entry.name) &&
+      path.join(directory, entry.name) !== outputFilePathAbs // Исключаем сам выходной файл
+  );
+
+  filteredEntries.sort((a, b) => {
+    if (a.isDirectory() && !b.isDirectory()) return -1;
+    if (!a.isDirectory() && b.isDirectory()) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const count = filteredEntries.length;
+  for (let i = 0; i < count; i++) {
+    const entry = filteredEntries[i];
+    const isLast = i === count - 1;
+    const connector = isLast ? ELBOW : TEE;
+    const entryPath = path.join(directory, entry.name);
+
+    treeString += `${prefix}${connector}${entry.name}\n`;
+
+    if (entry.isDirectory()) {
+      const nextPrefix = prefix + (isLast ? SPACE : PIPE);
+      treeString += await generateTree(entryPath, currentDepth + 1, nextPrefix);
+    }
+  }
+  return treeString;
+}
+
+// --- Логика чтения основных файлов (упрощенный codescan) ---
+async function scanEssentialFiles(fileList, projectRoot) {
+  let allContent = "";
+  console.log("\n🔍 Чтение основных конфигурационных файлов:");
+
+  for (const relativeFilePath of fileList) {
+    const fullPath = path.resolve(projectRoot, relativeFilePath);
+    try {
+      const fileContent = await fs.readFile(fullPath, "utf8");
+      console.log(`   -> Прочитан: ${relativeFilePath}`);
+      allContent += `--- File: ${relativeFilePath} ---\n\n`;
+      allContent += fileContent.trim();
+      allContent += `\n\n--- End of File: ${relativeFilePath} ---\n\n\n`;
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        console.warn(`   ⚠️ Файл не найден (пропущен): ${relativeFilePath}`);
+      } else {
+        console.error(`   ❌ Ошибка чтения файла ${relativeFilePath}:`, error.message);
+      }
+      // Добавляем маркер, что файл не найден или не прочитан
+      allContent += `--- File: ${relativeFilePath} ---\n\n`;
+      allContent += `[!!! Ошибка чтения или файл не найден: ${error.message || 'ENOENT'} !!!]`;
+      allContent += `\n\n--- End of File: ${relativeFilePath} ---\n\n\n`;
+    }
+  }
+  return allContent;
+}
+
+// --- Основная функция ---
+async function run() {
+  const projectRoot = process.cwd();
+  const outputFilename = argv.output;
+  const outputFilePath = path.resolve(projectRoot, outputFilename);
+  const resumeFilePath = argv.resumeFile ? path.resolve(projectRoot, argv.resumeFile) : null;
+
+
+  console.log(`--- Генерация контекста для AI сессии (aicon) ---`); // Обновили лог
+  console.log(`Корневая директория проекта: ${projectRoot}`);
+  console.log(`Выходной файл: ${outputFilePath}`);
+  if(resumeFilePath) {
+    console.log(`Файл Резюме Сессии: ${resumeFilePath}`);
+  } else {
+    console.log(`Файл Резюме Сессии: Не указан (замените плейсхолдер вручную)`);
+  }
+  console.log("-------------------------------------------------\n");
+
+  // 1. Читаем Резюме Сессии, если файл указан
+  let sessionResumeContent = "[!!! ВСТАВЬТЕ СЮДА ПОЛНЫЙ ТЕКСТ \"РЕЗЮМЕ СЕССИИ\" С ПРОШЛОГО РАЗА ИЛИ УДАЛИТЕ ЭТОТ БЛОК !!!]";
+  if (resumeFilePath) {
+      try {
+          sessionResumeContent = await fs.readFile(resumeFilePath, 'utf8');
+          console.log(`✅ Резюме сессии прочитано из ${argv.resumeFile}`);
+      } catch (error) {
+          console.warn(`⚠️ Не удалось прочитать файл Резюме Сессии (${argv.resumeFile}): ${error.message}. Используется плейсхолдер.`);
+      }
+  }
+   // Вставляем прочитанное резюме (или плейсхолдер) в шаблон
+   const finalPromptTemplate = NEW_SESSION_PROMPT_TEMPLATE.replace(
+    /\[!!! ВСТАВЬТЕ СЮДА ПОЛНЫЙ ТЕКСТ "РЕЗЮМЕ СЕССИИ" С ПРОШЛОГО РАЗА !!!\]/g, // Заменяем плейсхолдер
+    sessionResumeContent.trim() // Убираем лишние пробелы из резюме
+  );
+
+
+  // 2. Генерируем дерево каталогов
+  console.log("🌳 Построение дерева каталогов...");
+  const rootDirName = path.basename(projectRoot);
+  let treeOutput = `${rootDirName}\n`;
+  treeOutput += await generateTree(projectRoot, 0); // Глубина 0 для корневого вызова
+  console.log("   -> Дерево построено.");
+
+  // 3. Сканируем основные файлы
+  const essentialFilesContent = await scanEssentialFiles(ESSENTIAL_FILES, projectRoot);
+
+  // 4. Собираем финальный вывод
+  // Добавили явный маркер начала и конца генерируемого контекста
+  const finalOutput = `
+${finalPromptTemplate}
+
+<!-- НАЧАЛО АВТОМАТИЧЕСКИ СГЕНЕРИРОВАННОГО КОНТЕКСТА -->
+
+**Структура Проекта (сгенерировано \`aicon\`, глубина ${DIRTREE_MAX_DEPTH}):**
+\`\`\`text
+${treeOutput.trim()}
+\`\`\`
+
+**Содержимое Ключевых Конфигурационных Файлов (сгенерировано \`aicon\`):**
+\`\`\`typescript 
+// или другой язык по необходимости
+${essentialFilesContent.trim()}
+\`\`\`
+
+<!-- КОНЕЦ АВТОМАТИЧЕСКИ СГЕНЕРИРОВАННОГО КОНТЕКСТА -->
+`;
+
+  // 5. Записываем в файл
+  try {
+    await fs.writeFile(outputFilePath, finalOutput.trim() + '\n', "utf8");
+    console.log(`\n✅ Успешно! Полный контекст для новой сессии AI сохранен в: ${outputFilename}`);
+    console.log("   -> Теперь скопируйте содержимое этого файла и вставьте в чат с AI.");
+  } catch (error) {
+    console.error(`\n❌ Ошибка записи в файл ${outputFilename}:`, error);
+    process.exit(1);
+  }
+}
+
+// --- Запуск ---
+run();
+
+--- End of File: aicon.js ---
+
+
+--- File: comment-remover.js ---
+
+#!/usr/bin/env node
+
+import fs from "fs/promises";
+import path from "path";
+import yargs from "yargs";
+import { hideBin } from "yargs/helpers";
+import ignore from "ignore";
+
+// --- Настройка и парсинг аргументов ---
+const argv = yargs(hideBin(process.argv))
+  .usage("Usage: $0 [options]")
+  .option("dir", {
+    alias: "d",
+    type: "string",
+    description: "Корневая директория для обработки файлов",
+    default: ".",
+  })
+  .option("exclude-dirs", {
+    alias: "ed",
+    type: "array",
+    description: "Имена директорий для исключения",
+    default: [
+      "node_modules",
+      ".git",
+      "dist",
+      "build",
+      "coverage",
+      ".vscode",
+      ".idea",
+    ],
+  })
+  .option("exclude-files", {
+    alias: "ef",
+    type: "array",
+    description: "Шаблоны файлов для исключения (глоб-паттерны)",
+    default: ["package-lock.json", "*.log", "*.min.js", "*.min.css", "*.map"],
+  })
+  .option("extensions", {
+    alias: "ext",
+    type: "array",
+    description: "Расширения файлов для обработки (без точки)",
+    // Основные веб + некоторые другие
+    default: [
+      "js",
+      "jsx",
+      "ts",
+      "tsx",
+      "mjs",
+      "cjs",
+      "css",
+      "scss",
+      "less",
+      "html",
+      "vue",
+      "svelte",
+      "json",
+      "md",
+      "yaml",
+      "yml",
+      "py",
+      "java",
+      "cs",
+      "php",
+      "rb",
+      "go",
+      "swift",
+      "kt",
+    ],
+  })
+  .option("dry-run", {
+    alias: "dr",
+    type: "boolean",
+    description: "Выполнить без реального изменения файлов",
+    default: false,
+  })
+  .option("verbose", {
+    alias: "v",
+    type: "boolean",
+    description: "Более подробный вывод (что игнорируется)",
+    default: false,
+  })
+  .help()
+  .alias("help", "h")
+  // Убрал alias -v для version, т.к. он используется для verbose
+  .epilog(
+    "Удаляет комментарии из указанных файлов, стараясь не затрагивать строки и regex."
+  )
+  .parseSync();
+
+// --- Параметры ---
+const ROOT_DIRECTORY = path.resolve(argv.dir);
+const EXCLUDE_DIRS_SET = new Set(argv.excludeDirs);
+const EXCLUDE_FILES_PATTERNS = argv.excludeFiles;
+const ALLOWED_EXTENSIONS = new Set(
+  argv.extensions.map((ext) => `.${ext.toLowerCase()}`)
+);
+const DRY_RUN = argv.dryRun;
+const VERBOSE = argv.verbose;
+
+// --- Регулярные выражения (для не-JS/TS) ---
+const multiLineCommentRegexCSS = /\/\*[\s\S]*?\*\//g; // CSS/SCSS/Less
+const htmlCommentRegex = /<!--[\s\S]*?-->/g; // HTML/XML/Vue/Svelte
+const hashCommentRegex = /#.*$/gm; // Python, Ruby, Yaml, Shell
+const cStyleSingleLineRegex = /\/\/.*$/gm; // Java, C#, Go, Swift, Kotlin, PHP (иногда)
+const cStyleMultiLineRegex = /\/\*[\s\S]*?\*\//g; // Java, C#, Go, Swift, Kotlin, PHP
+
+// --- Инициализация `ignore` ---
+const ig = ignore();
+ig.add(argv.excludeDirs.map((dir) => `${dir}/`));
+ig.add(EXCLUDE_FILES_PATTERNS);
+
+// Загрузка .gitignore
+let gitignoreLoaded = false;
+try {
+  const gitignorePath = path.join(ROOT_DIRECTORY, ".gitignore");
+  const gitignoreContent = await fs.readFile(gitignorePath, "utf8");
+  ig.add(gitignoreContent);
+  gitignoreLoaded = true;
+} catch {
+  // Игнорируем ошибку, если .gitignore нет
+}
+
+// --- Улучшенная функция удаления комментариев для JS/TS/JSX/TSX ---
+function removeJsTsComments(code) {
+  let result = "";
+  let inMultiLineComment = false;
+  let inSingleLineComment = false;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inTemplateLiteral = false;
+  let inRegexLiteral = false;
+  let isEscaped = false;
+
+  for (let i = 0; i < code.length; i++) {
+    const char = code[i];
+    const prevChar = i > 0 ? code[i - 1] : null;
+    const nextChar = i < code.length - 1 ? code[i + 1] : null;
+
+    if (isEscaped) {
+      isEscaped = false;
+      // Если мы были в комментарии, символ после экранирования все равно пропускаем
+      // Иначе - добавляем его как есть
+      if (!inMultiLineComment && !inSingleLineComment) {
+        result += char;
+      }
+      continue;
+    }
+
+    if (char === "\\") {
+      isEscaped = true;
+      // Добавляем сам \ если он не в комментарии
+      if (!inMultiLineComment && !inSingleLineComment) {
+        result += char;
+      }
+      continue;
+    }
+
+    // Обработка многострочных комментариев /* ... */
+    if (
+      !inSingleQuote &&
+      !inDoubleQuote &&
+      !inTemplateLiteral &&
+      !inRegexLiteral
+    ) {
+      if (char === "/" && nextChar === "*") {
+        if (!inMultiLineComment) {
+          // Начало комментария
+          inMultiLineComment = true;
+          i++; // Пропускаем *
+          continue;
+        }
+      } else if (char === "*" && nextChar === "/") {
+        if (inMultiLineComment) {
+          // Конец комментария
+          inMultiLineComment = false;
+          i++; // Пропускаем /
+          continue;
+        }
+      }
+    }
+
+    // Если внутри многострочного комментария, пропускаем символ
+    if (inMultiLineComment) {
+      continue;
+    }
+
+    // Обработка однострочных комментариев // ...
+    if (
+      !inSingleQuote &&
+      !inDoubleQuote &&
+      !inTemplateLiteral &&
+      !inRegexLiteral
+    ) {
+      if (char === "/" && nextChar === "/") {
+        if (!inSingleLineComment) {
+          // Начало комментария
+          inSingleLineComment = true;
+          i++; // Пропускаем второй /
+          continue;
+        }
+      } else if (char === "\n") {
+        if (inSingleLineComment) {
+          // Конец комментария
+          inSingleLineComment = false;
+          // Добавляем сам перенос строки, так как он не часть комментария
+          result += char;
+          continue;
+        }
+      }
+    }
+
+    // Если внутри однострочного комментария (и это не \n), пропускаем символ
+    if (inSingleLineComment) {
+      continue;
+    }
+
+    // Обработка строк
+    if (!inRegexLiteral) {
+      if (char === "'" && !inDoubleQuote && !inTemplateLiteral) {
+        inSingleQuote = !inSingleQuote;
+      } else if (char === '"' && !inSingleQuote && !inTemplateLiteral) {
+        inDoubleQuote = !inDoubleQuote;
+      } else if (char === "`" && !inSingleQuote && !inDoubleQuote) {
+        inTemplateLiteral = !inTemplateLiteral;
+      }
+    }
+
+    // Обработка регулярных выражений (упрощенная, но лучше чем ничего)
+    // Стараемся определить, является ли / началом regex или оператором деления
+    if (
+      !inSingleQuote &&
+      !inDoubleQuote &&
+      !inTemplateLiteral &&
+      !inMultiLineComment &&
+      !inSingleLineComment
+    ) {
+      if (char === "/") {
+        // Очень грубая проверка: если / идет после определенных символов, считаем regex
+        // Не идеально, но отсекает большинство случаев деления
+        const prevNonWs = (() => {
+          for (let j = i - 1; j >= 0; j--) {
+            if (!/\s/.test(code[j])) return code[j];
+          }
+          return null;
+        })();
+
+        if (
+          !inRegexLiteral &&
+          [
+            "(",
+            ",",
+            "=",
+            ":",
+            "[",
+            "!",
+            "&",
+            "|",
+            "?",
+            "{",
+            "}",
+            ";",
+            "\n",
+            null,
+          ].includes(prevNonWs)
+        ) {
+          inRegexLiteral = true;
+        } else if (inRegexLiteral) {
+          // Конец regex, если / не экранирован и не начало классового символа [...]
+          if (prevChar !== "\\" && prevChar !== "[") {
+            // Простая проверка на экранирование и классы
+            inRegexLiteral = false;
+          }
+        }
+      }
+    }
+
+    // Добавляем символ в результат, если он не является частью комментария
+    result += char;
+  }
+
+  return result;
+}
+
+// --- Функция удаления комментариев из одного файла ---
+async function removeCommentsFromFile(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (!ALLOWED_EXTENSIONS.has(extension)) {
+    return; // Пропускаем нецелевые расширения
+  }
+
+  try {
+    const originalContent = await fs.readFile(filePath, "utf8");
+    let newContent = originalContent;
+
+    const jsTsExtensions = [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"];
+    const cssLikeExtensions = [".css", ".scss", ".less"];
+    const htmlLikeExtensions = [".html", ".vue", ".svelte", ".xml", ".svg"];
+    const hashCommentLangs = [".py", ".rb", ".yml", ".yaml"]; // .sh, .pl etc.
+    const cStyleLangs = [".java", ".cs", ".go", ".swift", ".kt", ".php"]; // PHP поддерживает и #, и //, и /* */
+
+    if (jsTsExtensions.includes(extension)) {
+      newContent = removeJsTsComments(originalContent);
+    } else if (cssLikeExtensions.includes(extension)) {
+      newContent = newContent.replace(multiLineCommentRegexCSS, "");
+    } else if (htmlLikeExtensions.includes(extension)) {
+      newContent = newContent.replace(htmlCommentRegex, "");
+      // TODO: Потенциально можно вызывать removeJsTsComments/removeCssComments для <script>/<style>
+    } else if (hashCommentLangs.includes(extension)) {
+      newContent = newContent.replace(hashCommentRegex, "");
+    } else if (cStyleLangs.includes(extension)) {
+      newContent = newContent.replace(cStyleSingleLineRegex, "");
+      newContent = newContent.replace(cStyleMultiLineRegex, "");
+      if (extension === ".php") {
+        // PHP может иметь #
+        newContent = newContent.replace(hashCommentRegex, "");
+      }
+    } else if (extension === ".json") {
+      // JSON формально не поддерживает комментарии, не трогаем
+    } else if (extension === ".md") {
+      // Markdown может иметь HTML комментарии
+      newContent = newContent.replace(htmlCommentRegex, "");
+    }
+
+    // Убираем лишние пустые строки, которые могли образоваться
+    // Удаляет строки, состоящие только из пробельных символов
+    newContent = newContent.replace(/^[ \t]*[\r\n]/gm, "");
+    // Удаляет множественные пустые строки, оставляя одну
+    newContent = newContent.replace(/(\r?\n){2,}/g, "\n\n");
+
+    if (newContent !== originalContent) {
+      const relativePath = path.relative(ROOT_DIRECTORY, filePath);
+      if (DRY_RUN) {
+        console.log(
+          `[DRY RUN] 🧹 Комментарии будут удалены из: ${relativePath}`
+        );
+        // Можно добавить вывод diff для наглядности, но это усложнит код
+      } else {
+        try {
+          await fs.writeFile(filePath, newContent.trim() + "\n", "utf8"); // trim + \n для чистоты
+          console.log(`🧹 Комментарии удалены из: ${relativePath}`);
+        } catch (writeError) {
+          console.error(
+            `❌ Ошибка записи файла ${relativePath}: ${writeError.message}`
+          );
+        }
+      }
+    }
+  } catch (error) {
+    const relativePath = path.relative(ROOT_DIRECTORY, filePath);
+    if (error.code === "EACCES") {
+      console.warn(`⚠️ Нет доступа к файлу: ${relativePath}`);
+    } else if (error.code === "EISDIR") {
+      // Игнорируем
+    } else if (error.code === "ENOENT") {
+      console.warn(
+        `⚠️ Файл не найден (возможно, удален во время работы): ${relativePath}`
+      );
+    } else {
+      console.error(
+        `❌ Ошибка обработки файла ${relativePath}: ${error.message}`
+      );
+    }
+  }
+}
+
+// --- Рекурсивная функция обхода директорий ---
+async function processDirectory(directory) {
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    const relativePath = path.relative(ROOT_DIRECTORY, directory);
+    if (error.code === "EACCES") {
+      console.warn(`⚠️ Нет доступа к директории: ${relativePath}`);
+    } else {
+      console.error(
+        `❌ Ошибка чтения директории ${relativePath}: ${error.message}`
+      );
+    }
+    return;
+  }
+
+  for (const entry of entries) {
+    const currentPath = path.join(directory, entry.name);
+    const relativePath = path.relative(ROOT_DIRECTORY, currentPath);
+
+    if (ig.ignores(relativePath)) {
+      if (VERBOSE) console.log(`-- Игнорирование (правило): ${relativePath}`);
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      // Доп. проверка стандартных исключений (на случай если .gitignore их разрешает)
+      if (EXCLUDE_DIRS_SET.has(entry.name)) {
+        if (VERBOSE)
+          console.log(`-- Игнорирование (стандартное): ${relativePath}/`);
+        continue;
+      }
+      await processDirectory(currentPath);
+    } else if (entry.isFile()) {
+      await removeCommentsFromFile(currentPath);
+    }
+  }
+}
+
+// --- Функция запуска ---
+async function run() {
+  console.log("--- Удаление комментариев (v1.2) ---");
+  console.log(`Директория: ${ROOT_DIRECTORY}`);
+  console.log(
+    `Обрабатываемые расширения: ${[...ALLOWED_EXTENSIONS].join(", ")}`
+  );
+  console.log(`Исключенные директории: ${argv.excludeDirs.join(", ")}`);
+  console.log(
+    `Исключенные файлы/паттерны: ${EXCLUDE_FILES_PATTERNS.join(", ")}`
+  );
+  if (gitignoreLoaded) console.log("ℹ️ Используются правила из .gitignore");
+  if (DRY_RUN) {
+    console.log("\n⚠️ РЕЖИМ СУХОГО ЗАПУСКА (ФАЙЛЫ НЕ БУДУТ ИЗМЕНЕНЫ) ⚠️");
+  }
+  console.log("------------------------------------");
+
+  try {
+    console.log("\n🔍 Поиск и обработка файлов...");
+    await processDirectory(ROOT_DIRECTORY);
+    console.log("\n✅ Обработка завершена.");
+    if (DRY_RUN) {
+      console.log("ℹ️ Файлы не были изменены (--dry-run).");
+    }
+  } catch (error) {
+    console.error("\n❌ Произошла глобальная ошибка:", error);
+    process.exit(1);
+  }
+}
+
+// --- Запуск ---
+run();
+
+--- End of File: comment-remover.js ---
+
+
 --- File: dirtree.js ---
 
 #!/usr/bin/env node
@@ -151,229 +876,19 @@ run();
 --- End of File: dirtree.js ---
 
 
---- File: package-lock.json ---
-
-{
-  "name": "code-scanner-cli",
-  "version": "1.0.0",
-  "lockfileVersion": 3,
-  "requires": true,
-  "packages": {
-    "": {
-      "name": "code-scanner-cli",
-      "version": "1.0.0",
-      "license": "ISC",
-      "dependencies": {
-        "ignore": "^7.0.3",
-        "yargs": "^17.7.2"
-      },
-      "bin": {
-        "codescan": "code-scanner.js"
-      }
-    },
-    "node_modules/ansi-regex": {
-      "version": "5.0.1",
-      "resolved": "https://registry.npmjs.org/ansi-regex/-/ansi-regex-5.0.1.tgz",
-      "integrity": "sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=8"
-      }
-    },
-    "node_modules/ansi-styles": {
-      "version": "4.3.0",
-      "resolved": "https://registry.npmjs.org/ansi-styles/-/ansi-styles-4.3.0.tgz",
-      "integrity": "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg==",
-      "license": "MIT",
-      "dependencies": {
-        "color-convert": "^2.0.1"
-      },
-      "engines": {
-        "node": ">=8"
-      },
-      "funding": {
-        "url": "https://github.com/chalk/ansi-styles?sponsor=1"
-      }
-    },
-    "node_modules/cliui": {
-      "version": "8.0.1",
-      "resolved": "https://registry.npmjs.org/cliui/-/cliui-8.0.1.tgz",
-      "integrity": "sha512-BSeNnyus75C4//NQ9gQt1/csTXyo/8Sb+afLAkzAptFuMsod9HFokGNudZpi/oQV73hnVK+sR+5PVRMd+Dr7YQ==",
-      "license": "ISC",
-      "dependencies": {
-        "string-width": "^4.2.0",
-        "strip-ansi": "^6.0.1",
-        "wrap-ansi": "^7.0.0"
-      },
-      "engines": {
-        "node": ">=12"
-      }
-    },
-    "node_modules/color-convert": {
-      "version": "2.0.1",
-      "resolved": "https://registry.npmjs.org/color-convert/-/color-convert-2.0.1.tgz",
-      "integrity": "sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==",
-      "license": "MIT",
-      "dependencies": {
-        "color-name": "~1.1.4"
-      },
-      "engines": {
-        "node": ">=7.0.0"
-      }
-    },
-    "node_modules/color-name": {
-      "version": "1.1.4",
-      "resolved": "https://registry.npmjs.org/color-name/-/color-name-1.1.4.tgz",
-      "integrity": "sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==",
-      "license": "MIT"
-    },
-    "node_modules/emoji-regex": {
-      "version": "8.0.0",
-      "resolved": "https://registry.npmjs.org/emoji-regex/-/emoji-regex-8.0.0.tgz",
-      "integrity": "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==",
-      "license": "MIT"
-    },
-    "node_modules/escalade": {
-      "version": "3.2.0",
-      "resolved": "https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz",
-      "integrity": "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=6"
-      }
-    },
-    "node_modules/get-caller-file": {
-      "version": "2.0.5",
-      "resolved": "https://registry.npmjs.org/get-caller-file/-/get-caller-file-2.0.5.tgz",
-      "integrity": "sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg==",
-      "license": "ISC",
-      "engines": {
-        "node": "6.* || 8.* || >= 10.*"
-      }
-    },
-    "node_modules/ignore": {
-      "version": "7.0.3",
-      "resolved": "https://registry.npmjs.org/ignore/-/ignore-7.0.3.tgz",
-      "integrity": "sha512-bAH5jbK/F3T3Jls4I0SO1hmPR0dKU0a7+SY6n1yzRtG54FLO8d6w/nxLFX2Nb7dBu6cCWXPaAME6cYqFUMmuCA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 4"
-      }
-    },
-    "node_modules/is-fullwidth-code-point": {
-      "version": "3.0.0",
-      "resolved": "https://registry.npmjs.org/is-fullwidth-code-point/-/is-fullwidth-code-point-3.0.0.tgz",
-      "integrity": "sha512-zymm5+u+sCsSWyD9qNaejV3DFvhCKclKdizYaJUuHA83RLjb7nSuGnddCHGv0hk+KY7BMAlsWeK4Ueg6EV6XQg==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=8"
-      }
-    },
-    "node_modules/require-directory": {
-      "version": "2.1.1",
-      "resolved": "https://registry.npmjs.org/require-directory/-/require-directory-2.1.1.tgz",
-      "integrity": "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=0.10.0"
-      }
-    },
-    "node_modules/string-width": {
-      "version": "4.2.3",
-      "resolved": "https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz",
-      "integrity": "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==",
-      "license": "MIT",
-      "dependencies": {
-        "emoji-regex": "^8.0.0",
-        "is-fullwidth-code-point": "^3.0.0",
-        "strip-ansi": "^6.0.1"
-      },
-      "engines": {
-        "node": ">=8"
-      }
-    },
-    "node_modules/strip-ansi": {
-      "version": "6.0.1",
-      "resolved": "https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz",
-      "integrity": "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==",
-      "license": "MIT",
-      "dependencies": {
-        "ansi-regex": "^5.0.1"
-      },
-      "engines": {
-        "node": ">=8"
-      }
-    },
-    "node_modules/wrap-ansi": {
-      "version": "7.0.0",
-      "resolved": "https://registry.npmjs.org/wrap-ansi/-/wrap-ansi-7.0.0.tgz",
-      "integrity": "sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q==",
-      "license": "MIT",
-      "dependencies": {
-        "ansi-styles": "^4.0.0",
-        "string-width": "^4.1.0",
-        "strip-ansi": "^6.0.0"
-      },
-      "engines": {
-        "node": ">=10"
-      },
-      "funding": {
-        "url": "https://github.com/chalk/wrap-ansi?sponsor=1"
-      }
-    },
-    "node_modules/y18n": {
-      "version": "5.0.8",
-      "resolved": "https://registry.npmjs.org/y18n/-/y18n-5.0.8.tgz",
-      "integrity": "sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA==",
-      "license": "ISC",
-      "engines": {
-        "node": ">=10"
-      }
-    },
-    "node_modules/yargs": {
-      "version": "17.7.2",
-      "resolved": "https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz",
-      "integrity": "sha512-7dSzzRQ++CKnNI/krKnYRV7JKKPUXMEh61soaHKg9mrWEhzFWhFnxPxGl+69cD1Ou63C13NUPCnmIcrvqCuM6w==",
-      "license": "MIT",
-      "dependencies": {
-        "cliui": "^8.0.1",
-        "escalade": "^3.1.1",
-        "get-caller-file": "^2.0.5",
-        "require-directory": "^2.1.1",
-        "string-width": "^4.2.3",
-        "y18n": "^5.0.5",
-        "yargs-parser": "^21.1.1"
-      },
-      "engines": {
-        "node": ">=12"
-      }
-    },
-    "node_modules/yargs-parser": {
-      "version": "21.1.1",
-      "resolved": "https://registry.npmjs.org/yargs-parser/-/yargs-parser-21.1.1.tgz",
-      "integrity": "sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw==",
-      "license": "ISC",
-      "engines": {
-        "node": ">=12"
-      }
-    }
-  }
-}
-
---- End of File: package-lock.json ---
-
-
 --- File: package.json ---
 
 {
   "name": "admin228-cli-utils",
-  "version": "1.1.0",
-  "description": "Набор CLI-утилит: codescan (сканирование и объединение кода) и dirtree (генерация дерева каталогов).",
+  "version": "1.3.0",
+  "description": "Набор CLI-утилит: codescan, dirtree, comrem и aicon (подготовка контекста для AI).",
   "main": "codescan.js",
   "type": "module",
   "bin": {
     "codescan": "./codescan.js",
-    "dirtree": "./dirtree.js"
+    "dirtree": "./dirtree.js",
+    "comrem": "./comment-remover.js",
+    "aicon": "./aicon.js"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -387,7 +902,15 @@ run();
     "concatenate",
     "directory",
     "tree",
-    "structure"
+    "structure",
+    "comment",
+    "remove",
+    "clean",
+    "ai",
+    "context",
+    "prompt",
+    "session",
+    "prepare"
   ],
   "author": "admin228",
   "license": "ISC",
@@ -399,3 +922,10 @@ run();
 }
 
 --- End of File: package.json ---
+
+
+--- File: test/index.js ---
+
+let a = 5;
+
+--- End of File: test/index.js ---

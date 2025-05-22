@@ -49,6 +49,7 @@ const argv = yargs(hideBin(process.argv))
       ".cs",
       ".tsx",
       ".jsx",
+      ".ts",
     ],
     // --- End of modification ---
   })

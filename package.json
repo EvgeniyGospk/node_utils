@@ -11,7 +11,14 @@
     "aicon": "./aicon.js"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix",
+    "format": "prettier --write \"**/*.js\""
+  },
+  "jest": {
+    "testEnvironment": "node"
   },
   "keywords": [
     "cli",
@@ -38,5 +45,12 @@
     "ignore": "^5.3.1",
     "yargs": "^17.7.2"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "eslint": "^9.27.0",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-prettier": "^5.4.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.5.3"
+  }
 }

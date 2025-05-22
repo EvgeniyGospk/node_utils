@@ -1,0 +1,27 @@
+{
+  "env": {
+    "es2021": true,
+    "node": true
+  },
+  "extends": [
+    "eslint:recommended",
+    "plugin:node/recommended",
+    "plugin:prettier/recommended" // Включает eslint-config-prettier и eslint-plugin-prettier
+  ],
+  "parserOptions": {
+    "ecmaVersion": "latest", // или 12, 13 и т.д. в зависимости от версии Node.js
+    "sourceType": "module"
+  },
+  "rules": {
+    "prettier/prettier": "warn", // или "error" если хочешь, чтобы ошибки форматирования были критичными
+    "no-console": "off", // Утилиты CLI часто используют console.log, так что отключаем
+    "node/no-unsupported-features/es-syntax": [
+      "error",
+      {
+        "version": ">=16.0.0", // Укажи версию Node.js, на которую ориентируешься
+        "ignores": ["modules"] // Уже используем ES Modules
+      }
+    ]
+    // Здесь можно добавлять или переопределять другие правила
+  }
+}
