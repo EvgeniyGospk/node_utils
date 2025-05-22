@@ -1,11 +1,13 @@
 // eslint.config.js
-import pluginJs from "@eslint/js"; // Для js.configs.recommended
+import pluginJs from "@eslint/js";
 import pluginJest from "eslint-plugin-jest";
-import globals from "globals"; // Для Node.js глобалов в других файлах
-// Уберем пока Prettier и pluginN для максимального упрощения
+import globals from "globals";
+import pluginN from "eslint-plugin-n";
+import eslintConfigPrettier from "eslint-config-prettier";
+import pluginPrettier from "eslint-plugin-prettier";
 
 export default [
-  // Глобальные игноры
+  // 1. Глобальные игноры
   {
     ignores: [
       "node_modules/",
@@ -18,89 +20,119 @@ export default [
     ],
   },
 
-  // Базовые правила ESLint - применяются ко всему
+  // 2. Базовые рекомендуемые правила ESLint
   pluginJs.configs.recommended,
 
-  // Конфигурация для файлов, НЕ являющихся тестами Jest
+  // 3. Конфигурация для ОСНОВНЫХ .js файлов
   {
-    name: "project/non-test-files",
-    files: ["**/*.js"], // Ко всем js
-    ignores: [
-      "__tests__/**/*.js", // КРОМЕ тестов
-      "eslint.config.js", // КРОМЕ самого конфига
-    ],
+    name: "project/source-files",
+    files: ["**/*.js"],
+    ignores: ["__tests__/**/*.js", "eslint.config.js", "test/**/*.js"],
+    plugins: { n: pluginN, prettier: pluginPrettier },
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
       globals: { ...globals.node, ...globals.es2021 },
     },
     rules: {
+      ...eslintConfigPrettier.rules,
+      "prettier/prettier": "warn",
       "no-console": "off",
-      // Здесь пока не добавляем правила 'n/' для простоты
+      "n/no-deprecated-api": "error",
+      "n/no-unpublished-bin": "error",
+      "n/no-unsupported-features/es-builtins": [
+        "error",
+        { version: ">=16.0.0" },
+      ],
+      "n/no-unsupported-features/es-syntax": [
+        "error",
+        { version: ">=16.0.0", ignores: [] },
+      ],
+      "n/no-unsupported-features/node-builtins": [
+        "error",
+        { version: ">=16.0.0" },
+      ],
+      "n/process-exit-as-throw": "error",
+      "n/shebang": "error",
     },
   },
 
-  // Конфигурация для тестовых файлов Jest, СТРОГО по документации plugin-jest
-  // Она должна идти ПОСЛЕ общей конфигурации, чтобы переопределить globals
+  // 4. Конфигурация для тестовых файлов Jest
   {
     name: "project/jest-tests",
-    files: ["**/*.test.js", "**/*.spec.js"], // Убедись, что это соответствует твоим тестовым файлам
-    // У тебя это __tests__/**/*.js
-    // Заменим на files: ["__tests__/**/*.js"],
-
-    // Вариант А: Используем их рекомендуемую flat-конфигурацию
+    files: ["__tests__/**/*.js"],
+    // Сначала применяем рекомендуемую конфигурацию Jest для flat config
+    // Это должно принести с собой languageOptions с jest globals и базовые правила jest.
     ...pluginJest.configs["flat/recommended"],
-    // И если нужно, добавляем свои правила или переопределяем
-    // rules: {
-    //   ...pluginJest.configs['flat/recommended'].rules, // Чтобы сохранить их правила
-    //   "какое-то-правило-jest": "off" // Пример переопределения
-    // }
-  },
-  /*
-  // Вариант Б (если Вариант А не сработал, как было раньше): Явная настройка по их документации
-  // Этот вариант мы уже пробовали, и он работал в минимальном конфиге!
-  {
-    name: "project/jest-tests-explicit",
-    files: ["__tests__/**\/*.js"],
-    plugins: { jest: pluginJest },
-    languageOptions: {
-      globals: pluginJest.environments.globals.globals,
-    },
-    rules: {
-      'jest/no-disabled-tests': 'warn',
-      'jest/no-focused-tests': 'error',
-      'jest/no-identical-title': 'error',
-      'jest/valid-expect': 'error',
-    },
-  },
-  */
 
-  // Конфигурация для файла eslint.config.js
+    // Затем ДОПОЛНЯЕМ или ПЕРЕОПРЕДЕЛЯЕМ плагины и правила.
+    // Если мы определяем новый объект `plugins` или `rules`,
+    // то то, что было в `...pluginJest.configs['flat/recommended']` для `plugins` и `rules`
+    // может быть перетерто, если ключи совпадают.
+    // Поэтому, если мы определяем `plugins` здесь, нужно снова включить `jest`.
+    plugins: {
+      jest: pluginJest, // <--- ЯВНО УКАЗЫВАЕМ JEST ПЛАГИН ЗДЕСЬ
+      prettier: pluginPrettier,
+      n: pluginN,
+    },
+    // languageOptions из `flat/recommended` должны остаться, если мы их не переопределяем.
+    // Если хотим быть уверены или дополнить:
+    // languageOptions: {
+    //   globals: {
+    //     ...pluginJest.environments.globals.globals, // Гарантируем Jest глобалы
+    //     myCustomTestGlobal: true, // Пример добавления своего
+    //   }
+    // },
+    rules: {
+      // Сначала правила Prettier
+      ...eslintConfigPrettier.rules,
+      "prettier/prettier": "warn",
+
+      // Потом можно добавить/переопределить правила Jest.
+      // Многие уже будут из `flat/recommended`.
+      "jest/no-commented-out-tests": "warn",
+      // "jest/no-disabled-tests": "warn", // уже должно быть
+      // "jest/no-focused-tests": "error", // уже должно быть
+      // "jest/no-identical-title": "error", // уже должно быть
+      // "jest/valid-expect": "error", // уже должно быть
+
+      // Другие правила
+      "no-console": "off",
+      "n/no-unpublished-import": "off",
+      "n/no-extraneous-import": "off",
+      "n/no-missing-import": "off",
+    },
+  },
+
+  // 5. Конфигурация для файла eslint.config.js
   {
     name: "project/eslint-config-file",
     files: ["eslint.config.js"],
+    plugins: { n: pluginN },
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
       globals: { ...globals.node },
     },
     rules: {
-      // Здесь пока не добавляем правила 'n/' для простоты
+      "n/no-unpublished-import": "off",
+      "n/no-extraneous-import": "off",
       "no-unused-vars": [
         "warn",
-        {
-          varsIgnorePattern: "^(eslintConfigPrettier|pluginPrettier|pluginN)$",
-        },
+        { varsIgnorePattern: "^(eslintConfigPrettier)$" },
       ],
     },
   },
 
-  // Конфигурация для папки test/ (не Jest)
+  // 6. Конфигурация для папки test/ (не Jest)
   {
     name: "project/other-test-files",
     files: ["test/**/*.js"],
     languageOptions: { globals: { ...globals.node } },
+    plugins: { n: pluginN, prettier: pluginPrettier },
     rules: {
+      ...eslintConfigPrettier.rules,
+      "prettier/prettier": "warn",
       "no-unused-vars": "off",
       "no-console": "off",
     },
