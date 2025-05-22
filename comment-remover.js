@@ -39,7 +39,6 @@ const argv = yargs(hideBin(process.argv))
     alias: "ext",
     type: "array",
     description: "Расширения файлов для обработки (без точки)",
-    // Основные веб + некоторые другие
     default: [
       "js",
       "jsx",
@@ -81,7 +80,6 @@ const argv = yargs(hideBin(process.argv))
   })
   .help()
   .alias("help", "h")
-  // Убрал alias -v для version, т.к. он используется для verbose
   .epilog(
     "Удаляет комментарии из указанных файлов, стараясь не затрагивать строки и regex."
   )
@@ -98,27 +96,34 @@ const DRY_RUN = argv.dryRun;
 const VERBOSE = argv.verbose;
 
 // --- Регулярные выражения (для не-JS/TS) ---
-const multiLineCommentRegexCSS = /\/\*[\s\S]*?\*\//g; // CSS/SCSS/Less
-const htmlCommentRegex = /<!--[\s\S]*?-->/g; // HTML/XML/Vue/Svelte
-const hashCommentRegex = /#.*$/gm; // Python, Ruby, Yaml, Shell
-const cStyleSingleLineRegex = /\/\/.*$/gm; // Java, C#, Go, Swift, Kotlin, PHP (иногда)
-const cStyleMultiLineRegex = /\/\*[\s\S]*?\*\//g; // Java, C#, Go, Swift, Kotlin, PHP
+const multiLineCommentRegexCSS = /\/\*[\s\S]*?\*\//g;
+const htmlCommentRegex = /<!--[\s\S]*?-->/g;
+const hashCommentRegex = /#.*$/gm;
+const cStyleSingleLineRegex = /\/\/.*$/gm;
+const cStyleMultiLineRegex = /\/\*[\s\S]*?\*\//g;
 
 // --- Инициализация `ignore` ---
 const ig = ignore();
-ig.add(argv.excludeDirs.map((dir) => `${dir}/`));
-ig.add(EXCLUDE_FILES_PATTERNS);
-
-// Загрузка .gitignore
 let gitignoreLoaded = false;
-try {
-  const gitignorePath = path.join(ROOT_DIRECTORY, ".gitignore");
-  const gitignoreContent = await fs.readFile(gitignorePath, "utf8");
-  ig.add(gitignoreContent);
-  gitignoreLoaded = true;
-} catch {
-  // Игнорируем ошибку, если .gitignore нет
-}
+
+// Асинхронная IIFE для загрузки .gitignore
+(async () => {
+  ig.add(argv.excludeDirs.map((dir) => `${dir}/`));
+  ig.add(EXCLUDE_FILES_PATTERNS);
+  try {
+    const gitignorePath = path.join(ROOT_DIRECTORY, ".gitignore");
+    const gitignoreContent = await fs.readFile(gitignorePath, "utf8");
+    ig.add(gitignoreContent);
+    gitignoreLoaded = true;
+    // console.log("ℹ️ .gitignore правила загружены (внутри IIFE)"); // Закомментировано для тестов
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      // console.warn(`⚠️ Ошибка при чтении .gitignore (внутри IIFE): ${error.message}`);
+    } else {
+      // console.log("ℹ️ .gitignore не найден, пропускается (внутри IIFE).");
+    }
+  }
+})();
 
 // --- Улучшенная функция удаления комментариев для JS/TS/JSX/TSX ---
 function removeJsTsComments(code) {
@@ -138,8 +143,6 @@ function removeJsTsComments(code) {
 
     if (isEscaped) {
       isEscaped = false;
-      // Если мы были в комментарии, символ после экранирования все равно пропускаем
-      // Иначе - добавляем его как есть
       if (!inMultiLineComment && !inSingleLineComment) {
         result += char;
       }
@@ -148,7 +151,6 @@ function removeJsTsComments(code) {
 
     if (char === "\\") {
       isEscaped = true;
-      // Добавляем сам \ если он не в комментарии
       if (!inMultiLineComment && !inSingleLineComment) {
         result += char;
       }
@@ -159,27 +161,34 @@ function removeJsTsComments(code) {
     if (
       !inSingleQuote &&
       !inDoubleQuote &&
-      !inTemplateLiteral &&
+      !inTemplateLiteral && // Если мы в шаблонном литерале, эту логику пропускаем
       !inRegexLiteral
     ) {
       if (char === "/" && nextChar === "*") {
-        if (!inMultiLineComment) {
-          // Начало комментария
+        // Проверяем, не является ли это JSDoc
+        if (code[i + 2] === "*" && code[i + 3] !== "/") {
+          // Начало /** (и не /**/)
+          // Это JSDoc. Мы НЕ хотим его удалять.
+          // Символы '/', '*', '*' будут добавлены в result в основном цикле ниже.
+        } else if (!inMultiLineComment) {
+          // Это обычный многострочный комментарий /*
           inMultiLineComment = true;
           i++; // Пропускаем *
           continue;
         }
       } else if (char === "*" && nextChar === "/") {
         if (inMultiLineComment) {
-          // Конец комментария
+          // Завершаем только обычный многострочный комментарий
           inMultiLineComment = false;
           i++; // Пропускаем /
           continue;
         }
+        // Если это был JSDoc, то inMultiLineComment оставалось false,
+        // и этот блок не должен был выполниться для его закрытия.
+        // Символы '*' и '/' из JSDoc добавятся в result.
       }
     }
 
-    // Если внутри многострочного комментария, пропускаем символ
     if (inMultiLineComment) {
       continue;
     }
@@ -188,62 +197,57 @@ function removeJsTsComments(code) {
     if (
       !inSingleQuote &&
       !inDoubleQuote &&
-      !inTemplateLiteral &&
+      !inTemplateLiteral && // Если мы в шаблонном литерале, эту логику пропускаем
       !inRegexLiteral
     ) {
       if (char === "/" && nextChar === "/") {
         if (!inSingleLineComment) {
-          // Начало комментария
           inSingleLineComment = true;
-          i++; // Пропускаем второй /
+          i++;
           continue;
         }
       } else if (char === "\n") {
         if (inSingleLineComment) {
-          // Конец комментария
           inSingleLineComment = false;
-          // Добавляем сам перенос строки, так как он не часть комментария
           result += char;
           continue;
         }
       }
     }
 
-    // Если внутри однострочного комментария (и это не \n), пропускаем символ
     if (inSingleLineComment) {
       continue;
     }
 
     // Обработка строк
-    if (!inRegexLiteral) {
-      if (char === "'" && !inDoubleQuote && !inTemplateLiteral) {
+    if (!inRegexLiteral && !inTemplateLiteral) {
+      // Не обрабатываем кавычки внутри шаблонных строк этой логикой
+      if (char === "'" && !inDoubleQuote) {
         inSingleQuote = !inSingleQuote;
-      } else if (char === '"' && !inSingleQuote && !inTemplateLiteral) {
+      } else if (char === '"' && !inSingleQuote) {
         inDoubleQuote = !inDoubleQuote;
-      } else if (char === "`" && !inSingleQuote && !inDoubleQuote) {
-        inTemplateLiteral = !inTemplateLiteral;
       }
     }
+    // Обработка шаблонных литералов (основной вход/выход)
+    if (char === "`" && !inSingleQuote && !inDoubleQuote && !inRegexLiteral) {
+      inTemplateLiteral = !inTemplateLiteral;
+    }
 
-    // Обработка регулярных выражений (упрощенная, но лучше чем ничего)
-    // Стараемся определить, является ли / началом regex или оператором деления
+    // Обработка регулярных выражений
     if (
       !inSingleQuote &&
       !inDoubleQuote &&
-      !inTemplateLiteral &&
+      !inTemplateLiteral && // Если мы в шаблонном литерале, эту логику пропускаем
       !inMultiLineComment &&
       !inSingleLineComment
     ) {
       if (char === "/") {
-        // Очень грубая проверка: если / идет после определенных символов, считаем regex
-        // Не идеально, но отсекает большинство случаев деления
         const prevNonWs = (() => {
           for (let j = i - 1; j >= 0; j--) {
             if (!/\s/.test(code[j])) return code[j];
           }
           return null;
         })();
-
         if (
           !inRegexLiteral &&
           [
@@ -265,19 +269,14 @@ function removeJsTsComments(code) {
         ) {
           inRegexLiteral = true;
         } else if (inRegexLiteral) {
-          // Конец regex, если / не экранирован и не начало классового символа [...]
           if (prevChar !== "\\" && prevChar !== "[") {
-            // Простая проверка на экранирование и классы
             inRegexLiteral = false;
           }
         }
       }
     }
-
-    // Добавляем символ в результат, если он не является частью комментария
     result += char;
   }
-
   return result;
 }
 
@@ -285,7 +284,7 @@ function removeJsTsComments(code) {
 async function removeCommentsFromFile(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   if (!ALLOWED_EXTENSIONS.has(extension)) {
-    return; // Пропускаем нецелевые расширения
+    return;
   }
 
   try {
@@ -294,9 +293,9 @@ async function removeCommentsFromFile(filePath) {
 
     const jsTsExtensions = [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"];
     const cssLikeExtensions = [".css", ".scss", ".less"];
-    const htmlLikeExtensions = [".html", ".vue", ".svelte", ".xml", ".svg"];
-    const hashCommentLangs = [".py", ".rb", ".yml", ".yaml"]; // .sh, .pl etc.
-    const cStyleLangs = [".java", ".cs", ".go", ".swift", ".kt", ".php"]; // PHP поддерживает и #, и //, и /* */
+    const htmlLikeExtensions = [".html", ".vue", ".svelte", ".xml", ".svg"]; // Добавил .xml, .svg
+    const hashCommentLangs = [".py", ".rb", ".yml", ".yaml"];
+    const cStyleLangs = [".java", ".cs", ".go", ".swift", ".kt", ".php"];
 
     if (jsTsExtensions.includes(extension)) {
       newContent = removeJsTsComments(originalContent);
@@ -304,28 +303,22 @@ async function removeCommentsFromFile(filePath) {
       newContent = newContent.replace(multiLineCommentRegexCSS, "");
     } else if (htmlLikeExtensions.includes(extension)) {
       newContent = newContent.replace(htmlCommentRegex, "");
-      // TODO: Потенциально можно вызывать removeJsTsComments/removeCssComments для <script>/<style>
     } else if (hashCommentLangs.includes(extension)) {
       newContent = newContent.replace(hashCommentRegex, "");
     } else if (cStyleLangs.includes(extension)) {
       newContent = newContent.replace(cStyleSingleLineRegex, "");
       newContent = newContent.replace(cStyleMultiLineRegex, "");
       if (extension === ".php") {
-        // PHP может иметь #
         newContent = newContent.replace(hashCommentRegex, "");
       }
     } else if (extension === ".json") {
-      // JSON формально не поддерживает комментарии, не трогаем
+      // JSON не трогаем
     } else if (extension === ".md") {
-      // Markdown может иметь HTML комментарии
       newContent = newContent.replace(htmlCommentRegex, "");
     }
 
-    // Убираем лишние пустые строки, которые могли образоваться
-    // Удаляет строки, состоящие только из пробельных символов
-    newContent = newContent.replace(/^[ \t]*[\r\n]/gm, "");
-    // Удаляет множественные пустые строки, оставляя одну
-    newContent = newContent.replace(/(\r?\n){2,}/g, "\n\n");
+    // Убираем лишние пустые строки
+    newContent = newContent.replace(/(\r?\n){3,}/g, "\n\n");
 
     if (newContent !== originalContent) {
       const relativePath = path.relative(ROOT_DIRECTORY, filePath);
@@ -333,10 +326,9 @@ async function removeCommentsFromFile(filePath) {
         console.log(
           `[DRY RUN] 🧹 Комментарии будут удалены из: ${relativePath}`
         );
-        // Можно добавить вывод diff для наглядности, но это усложнит код
       } else {
         try {
-          await fs.writeFile(filePath, newContent.trim() + "\n", "utf8"); // trim + \n для чистоты
+          await fs.writeFile(filePath, newContent.trim() + "\n", "utf8");
           console.log(`🧹 Комментарии удалены из: ${relativePath}`);
         } catch (writeError) {
           console.error(
@@ -347,19 +339,16 @@ async function removeCommentsFromFile(filePath) {
     }
   } catch (error) {
     const relativePath = path.relative(ROOT_DIRECTORY, filePath);
-    if (error.code === "EACCES") {
+    if (error.code === "EACCES")
       console.warn(`⚠️ Нет доступа к файлу: ${relativePath}`);
-    } else if (error.code === "EISDIR") {
-      // Игнорируем
-    } else if (error.code === "ENOENT") {
-      console.warn(
-        `⚠️ Файл не найден (возможно, удален во время работы): ${relativePath}`
-      );
-    } else {
+    else if (error.code === "EISDIR") {
+      /* Игнорируем */
+    } else if (error.code === "ENOENT")
+      console.warn(`⚠️ Файл не найден: ${relativePath}`);
+    else
       console.error(
         `❌ Ошибка обработки файла ${relativePath}: ${error.message}`
       );
-    }
   }
 }
 
@@ -370,13 +359,12 @@ async function processDirectory(directory) {
     entries = await fs.readdir(directory, { withFileTypes: true });
   } catch (error) {
     const relativePath = path.relative(ROOT_DIRECTORY, directory);
-    if (error.code === "EACCES") {
+    if (error.code === "EACCES")
       console.warn(`⚠️ Нет доступа к директории: ${relativePath}`);
-    } else {
+    else
       console.error(
         `❌ Ошибка чтения директории ${relativePath}: ${error.message}`
       );
-    }
     return;
   }
 
@@ -390,7 +378,6 @@ async function processDirectory(directory) {
     }
 
     if (entry.isDirectory()) {
-      // Доп. проверка стандартных исключений (на случай если .gitignore их разрешает)
       if (EXCLUDE_DIRS_SET.has(entry.name)) {
         if (VERBOSE)
           console.log(`-- Игнорирование (стандартное): ${relativePath}/`);
@@ -405,7 +392,9 @@ async function processDirectory(directory) {
 
 // --- Функция запуска ---
 async function run() {
-  console.log("--- Удаление комментариев (v1.2) ---");
+  console.log(
+    "--- Удаление комментариев (v1.2 - JSDoc preserved, template literal comments preserved) ---"
+  );
   console.log(`Директория: ${ROOT_DIRECTORY}`);
   console.log(
     `Обрабатываемые расширения: ${[...ALLOWED_EXTENSIONS].join(", ")}`
@@ -415,23 +404,25 @@ async function run() {
     `Исключенные файлы/паттерны: ${EXCLUDE_FILES_PATTERNS.join(", ")}`
   );
   if (gitignoreLoaded) console.log("ℹ️ Используются правила из .gitignore");
-  if (DRY_RUN) {
+  if (DRY_RUN)
     console.log("\n⚠️ РЕЖИМ СУХОГО ЗАПУСКА (ФАЙЛЫ НЕ БУДУТ ИЗМЕНЕНЫ) ⚠️");
-  }
   console.log("------------------------------------");
 
   try {
     console.log("\n🔍 Поиск и обработка файлов...");
     await processDirectory(ROOT_DIRECTORY);
     console.log("\n✅ Обработка завершена.");
-    if (DRY_RUN) {
-      console.log("ℹ️ Файлы не были изменены (--dry-run).");
-    }
+    if (DRY_RUN) console.log("ℹ️ Файлы не были изменены (--dry-run).");
   } catch (error) {
     console.error("\n❌ Произошла глобальная ошибка:", error);
     process.exit(1);
   }
 }
 
+// --- Экспорты для тестирования ---
+export { removeJsTsComments };
+
 // --- Запуск ---
-run();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run();
+}
