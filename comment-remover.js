@@ -125,6 +125,8 @@ function removeJsTsComments(code) {
 
     if (isEscaped) {
       isEscaped = false;
+      // Если мы были в комментарии, но это был экранированный символ внутри него,
+      // то он не должен добавляться. Но если это экранированный символ в коде, то добавляем.
       if (!inMultiLineComment && !inSingleLineComment) {
         result += char;
       }
@@ -133,32 +135,92 @@ function removeJsTsComments(code) {
 
     if (char === "\\") {
       isEscaped = true;
+      // Сам слеш добавляем, если он не в комментарии
       if (!inMultiLineComment && !inSingleLineComment) {
         result += char;
       }
       continue;
     }
 
+    // --- ПЕРЕНОСИМ ОБРАБОТКУ СТРОК И ШАБЛОННЫХ ЛИТЕРАЛОВ В НАЧАЛО ---
+    // Это важно, чтобы правильно определить, находимся ли мы внутри строки,
+    // ПЕРЕД тем как проверять на комментарии.
+
     if (
-      !inSingleQuote &&
+      char === "'" &&
+      !isEscaped &&
       !inDoubleQuote &&
       !inTemplateLiteral &&
       !inRegexLiteral
     ) {
-      if (char === "/" && nextChar === "*") {
-        if (code[i + 2] === "*" && code[i + 3] !== "/") {
-          // JSDoc, не удаляем
-        } else if (!inMultiLineComment) {
-          inMultiLineComment = true;
-          i++;
-          continue;
+      inSingleQuote = !inSingleQuote;
+      result += char;
+      continue;
+    }
+    if (
+      char === '"' &&
+      !isEscaped &&
+      !inSingleQuote &&
+      !inTemplateLiteral &&
+      !inRegexLiteral
+    ) {
+      inDoubleQuote = !inDoubleQuote;
+      result += char;
+      continue;
+    }
+    if (
+      char === "`" &&
+      !isEscaped &&
+      !inSingleQuote &&
+      !inDoubleQuote &&
+      !inRegexLiteral
+    ) {
+      inTemplateLiteral = !inTemplateLiteral;
+      result += char;
+      continue;
+    }
+
+    // Если мы внутри любой строки/шаблона или regex, просто добавляем символ и идем дальше
+    // (кроме случаев, когда это конец комментария, который мы уже обработали бы)
+    if (inSingleQuote || inDoubleQuote || inTemplateLiteral || inRegexLiteral) {
+      // Обработка конца regex (упрощенная, должна быть здесь, если regex активен)
+      if (
+        inRegexLiteral &&
+        char === "/" &&
+        prevChar !== "\\" &&
+        prevChar !== "["
+      ) {
+        // Простая проверка на экранирование и классы, чтобы определить конец regex
+        // Это может быть неидеально, если / является частью флагов, но для простоты
+        // предполагаем, что после / идут флаги и затем не-буквенный символ или конец.
+        // Более точная логика потребовала бы парсинга флагов.
+        let k = i + 1;
+        while (k < code.length && /[a-z]/i.test(code[k])) k++; // Пропускаем флаги
+        if (k === code.length || !/[a-z0-9_$]/i.test(code[k])) {
+          // Если дальше не буква/цифра/знак_доллара/подчеркивание
+          inRegexLiteral = false;
         }
-      } else if (char === "*" && nextChar === "/") {
-        if (inMultiLineComment) {
-          inMultiLineComment = false;
-          i++;
-          continue;
-        }
+      }
+      result += char;
+      continue;
+    }
+    // --------------------------------------------------------------------
+
+    // Теперь, когда мы ТОЧНО НЕ В СТРОКЕ, проверяем на комментарии
+    if (char === "/" && nextChar === "*") {
+      if (code[i + 2] === "*" && code[i + 3] !== "/") {
+        // JSDoc, не удаляем, он будет добавлен в result ниже
+      } else if (!inMultiLineComment) {
+        // Обычный /*
+        inMultiLineComment = true;
+        i++; // Пропускаем *
+        continue;
+      }
+    } else if (char === "*" && nextChar === "/") {
+      if (inMultiLineComment) {
+        inMultiLineComment = false;
+        i++; // Пропускаем /
+        continue;
       }
     }
 
@@ -166,24 +228,17 @@ function removeJsTsComments(code) {
       continue;
     }
 
-    if (
-      !inSingleQuote &&
-      !inDoubleQuote &&
-      !inTemplateLiteral &&
-      !inRegexLiteral
-    ) {
-      if (char === "/" && nextChar === "/") {
-        if (!inSingleLineComment) {
-          inSingleLineComment = true;
-          i++;
-          continue;
-        }
-      } else if (char === "\n") {
-        if (inSingleLineComment) {
-          inSingleLineComment = false;
-          result += char;
-          continue;
-        }
+    if (char === "/" && nextChar === "/") {
+      if (!inSingleLineComment) {
+        inSingleLineComment = true;
+        i++; // Пропускаем второй /
+        continue;
+      }
+    } else if (char === "\n") {
+      if (inSingleLineComment) {
+        inSingleLineComment = false;
+        result += char; // Перенос строки не часть комментария, добавляем его
+        continue;
       }
     }
 
@@ -191,58 +246,42 @@ function removeJsTsComments(code) {
       continue;
     }
 
-    if (!inRegexLiteral && !inTemplateLiteral) {
-      if (char === "'" && !inDoubleQuote) {
-        inSingleQuote = !inSingleQuote;
-      } else if (char === '"' && !inSingleQuote) {
-        inDoubleQuote = !inDoubleQuote;
+    // Обработка начала регулярных выражений (если мы не в строке и не в комментарии)
+    // Это условие должно быть после обработки комментариев, чтобы // или /* не были приняты за regex
+    if (char === "/") {
+      const prevNonWs = (() => {
+        for (let j = i - 1; j >= 0; j--) {
+          if (result.length > 0 && j >= result.length) j = result.length - 1; // Коррекция для j, если result еще короткий
+          if (j < 0) break;
+          const scanChar = j < result.length ? result[j] : code[j]; // Смотрим в result, если возможно
+          if (!/\s/.test(scanChar)) return scanChar;
+        }
+        return null;
+      })();
+
+      // Условие для начала regex немного упрощено
+      if (
+        [
+          "(",
+          ",",
+          "=",
+          ":",
+          "[",
+          "!",
+          "&",
+          "|",
+          "?",
+          "{",
+          "}",
+          ";",
+          "\n",
+          null,
+        ].includes(prevNonWs)
+      ) {
+        inRegexLiteral = true;
       }
-    }
-    if (char === "`" && !inSingleQuote && !inDoubleQuote && !inRegexLiteral) {
-      inTemplateLiteral = !inTemplateLiteral;
     }
 
-    if (
-      !inSingleQuote &&
-      !inDoubleQuote &&
-      !inTemplateLiteral &&
-      !inMultiLineComment &&
-      !inSingleLineComment
-    ) {
-      if (char === "/") {
-        const prevNonWs = (() => {
-          for (let j = i - 1; j >= 0; j--) {
-            if (!/\s/.test(code[j])) return code[j];
-          }
-          return null;
-        })();
-        if (
-          !inRegexLiteral &&
-          [
-            "(",
-            ",",
-            "=",
-            ":",
-            "[",
-            "!",
-            "&",
-            "|",
-            "?",
-            "{",
-            "}",
-            ";",
-            "\n",
-            null,
-          ].includes(prevNonWs)
-        ) {
-          inRegexLiteral = true;
-        } else if (inRegexLiteral) {
-          if (prevChar !== "\\" && prevChar !== "[") {
-            inRegexLiteral = false;
-          }
-        }
-      }
-    }
     result += char;
   }
   return result;
@@ -445,21 +484,23 @@ async function run() {
 }
 
 // --- Экспорты для тестирования ---
-export { removeJsTsComments };
+export { removeJsTsComments, removeCommentsFromFile };
 
 // --- Запуск ---
 // Это условие проверяет, является ли текущий модуль главным запущенным модулем.
 const scriptPath = path.resolve(process.argv[1]);
 const modulePath = path.resolve(fileURLToPath(import.meta.url));
 
-if (scriptPath === modulePath) {
-  // console.log("Запускаем run() потому что scriptPath === modulePath (прямой запуск)"); // Отладка
-  // console.log(`scriptPath: ${scriptPath}`);
-  // console.log(`modulePath: ${modulePath}`);
-  run();
-} else {
-  // Этот лог может быть полезен при отладке импортов/запуска, если что-то идет не так
-  // console.log("НЕ запускаем run() потому что scriptPath !== modulePath (вероятно, импорт в другом модуле)");
-  // console.log(`scriptPath: ${scriptPath}`);
-  // console.log(`modulePath: ${modulePath}`);
-}
+// if (scriptPath === modulePath) {
+//   // console.log("Запускаем run() потому что scriptPath === modulePath (прямой запуск)"); // Отладка
+//   // console.log(`scriptPath: ${scriptPath}`);
+//   // console.log(`modulePath: ${modulePath}`);
+//   run();
+// } else {
+//   // Этот лог может быть полезен при отладке импортов/запуска, если что-то идет не так
+//   // console.log("НЕ запускаем run() потому что scriptPath !== modulePath (вероятно, импорт в другом модуле)");
+//   // console.log(`scriptPath: ${scriptPath}`);
+//   // console.log(`modulePath: ${modulePath}`);
+// }
+
+run();

@@ -1,8 +1,7 @@
-// __tests__/comment-remover.test.js
-import { removeJsTsComments } from "../comment-remover.js"; // Импортируем функцию
+import { removeJsTsComments } from "../comment-remover.js"; 
 
 describe("CommentRemover Utility - removeJsTsComments", () => {
-  // Тесты на корректное удаление обычных комментариев
+  
   it("should remove a single-line comment //", () => {
     const code = "let a = 1; // this is a comment";
     const expected = "let a = 1; ";
@@ -31,21 +30,21 @@ describe("CommentRemover Utility - removeJsTsComments", () => {
   it("should PRESERVE comments inside template literal expressions ${...}", () => {
     const code =
       "const template = `template with // comment like text ${/* внутри */ `nested`}` // outer comment";
-    // Ожидаем, что комментарий ВНУТРИ ${...} останется, а ВНЕШНИЙ комментарий `// outer comment` удалится.
-    // Внешний комментарий `// comment like text` ВНУТРИ шаблонной строки, но НЕ ВНУТРИ `${...}`,
-    // согласно нашей текущей логике `!inTemplateLiteral` для поиска комментариев, тоже должен остаться.
+    
+    
+    
     const expected =
-      "const template = `template with // comment like text ${/* внутри */ `nested`}` "; // <--- ИСПРАВЛЕННЫЙ EXPECTED
+      "const template = `template with // comment like text ${/* внутри */ `nested`}` "; 
     expect(removeJsTsComments(code)).toBe(expected);
   });
 
-  // Тесты на проблему с JSDoc/Swagger
+  
   it("should PRESERVE JSDoc/Swagger style comments /** ... */", () => {
     const code =
       "/**\n * This is a JSDoc comment.\n * @param {string} name\n */\nfunction greet(name) {\n  // regular comment\n  return `Hello, ${name}`;\n}";
     const expectedAfterRemovalOfRegular =
       "/**\n * This is a JSDoc comment.\n * @param {string} name\n */\nfunction greet(name) {\n  \n  return `Hello, ${name}`;\n}";
-    // Текущая реализация УДАЛИТ JSDoc, поэтому тест должен упасть
+    
     expect(removeJsTsComments(code)).toBe(expectedAfterRemovalOfRegular);
   });
 
@@ -55,22 +54,22 @@ describe("CommentRemover Utility - removeJsTsComments", () => {
     expect(removeJsTsComments(code)).toBe(expected);
   });
 
-  // Тесты на проблему с пустыми строками (пока для removeJsTsComments)
-  // Позже, возможно, понадобятся тесты для removeCommentsFromFile, где происходит обработка пустых строк
+  
+  
   it("should not remove meaningful empty lines between code blocks by removeJsTsComments", () => {
     const code =
       "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}";
-    // removeJsTsComments сама по себе не должна удалять пустые строки, это делает другой код позже
+    
     expect(removeJsTsComments(code)).toBe(code);
   });
 
   it("should remove empty lines left after comment removal if they were the only content", () => {
     const code = "line1;\n// comment on its own line\nline3;";
-    const expected = "line1;\n\nline3;"; // Ожидаем, что строка от комментария станет пустой, но не удалится полностью (пока)
+    const expected = "line1;\n\nline3;"; 
     expect(removeJsTsComments(code)).toBe(expected);
   });
 
-  // Тест для https://example.com (комментарии, похожие на URL)
+  
   it("should not misinterpret // in URLs as comments", () => {
     const code = "const url = 'https://example.com'; // a comment";
     const expected = "const url = 'https://example.com'; ";
@@ -89,16 +88,3 @@ describe("CommentRemover Utility - removeJsTsComments", () => {
     expect(removeJsTsComments(code)).toBe(expected);
   });
 });
-
-// TODO: Позже добавить тесты для `removeCommentsFromFile`
-// Эти тесты будут сложнее, так как они включают чтение/запись файлов
-// и обработку пустых строк регулярками.
-// describe('CommentRemover Utility - removeCommentsFromFile', () => {
-//   // Тесты на обработку пустых строк
-//   it('should preserve single empty lines between code after full processing', async () => {
-//     // Этот тест потребует моки для fs
-//   });
-//   it('should collapse multiple empty lines to one/two after full processing', async () => {
-//     // Этот тест потребует моки для fs
-//   });
-// });
